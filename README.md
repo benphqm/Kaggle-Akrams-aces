@@ -9,7 +9,14 @@ It started off with trying to find the best numerical predictor and then trying 
 
 Then I went to go PCA the numerical data, identifying the most important components. This identifies the most important components, which are combinations of the original predictors. I wrote about it in the rmd notes. The goal here was to find uncorrelated predictors which would be more efficient at increasing R2 if they are put together, perhaps. Idk I jsut learned this shit in a diff class. 
 
-So my goal for now is to get in the third PC and factor it into the prediction. 
+PC1: Area/quality related stuff. 
+Things to test: How qual x area is correlated to overall qual, how additional qual variables can be gotten from the categorical variables, 
+
+PC2: Contrast between basement size and Abv ground SF
+Things to test: Engineered variables like ratios between bsmtSF and abv ground sf, 
+
+PC3: Horizontal sprawl (ranch homes) vs vertical homes (townhomes), not implemented
+Things to test: How to turn MSSubClass into a categorical variable or make it better numerically, other ways to measure this (maybe 2nd Floor SF / 1st floor Sf or total lot size) 
 
 
 Goal 2: Categorical predictors
