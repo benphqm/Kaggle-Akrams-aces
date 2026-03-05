@@ -1,0 +1,204 @@
+---
+title: "Akrams Aces - Useful functions"
+output: html_document
+date: "2026-03-05"
+---
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(ggfortify)
+
+```
+
+Compare Slope by levels (Numerical vs Numerical)
+Given one numerical variable, visualizes regression differences based on the levels of another variable. 
+```{r}
+compare_slopes_by_levels <- function(data, X, levels_var, n_groups = 4) {
+  # Create grouped version of the levels variable
+  data$.__levels_group <- cut(
+    data[[levels_var]],
+    breaks = n_groups,
+    include.lowest = TRUE
+  )
+
+  formula_str <- paste0("log(SalePrice) ~ ", X, " * .__levels_group")
+  model <- lm(as.formula(formula_str), data = data)
+  
+  ggplot(data, aes_string(x = X, y = "log(SalePrice)", color = ".__levels_group")) +
+    geom_point(alpha = 0.4) +
+    geom_smooth(method = "lm", se = FALSE) +
+    labs(
+      title = paste("Effect of", X, "on log(SalePrice) by", levels_var, "groups"),
+      color = levels_var
+    ) +
+    theme_minimal()
+}
+
+compare_slopes_by_levels(data=Train, X = "sqrtTotalSF", levels_var = "OverallQual", n_groups = 4)
+
+```
+
+Compare Slope by category (Numerical vs categorical)
+Has an additional argument highlight_cat, set to name of a category to visualize just this category
+```{r}
+compare_slopes_by_categories <- function(data, X, category_var, highlight_cat = NULL) {
+
+  data[[category_var]] <- as.factor(data[[category_var]])
+  
+  formula_str <- paste0("log(SalePrice) ~ ", X, " * ", category_var)
+  model <- lm(as.formula(formula_str), data = data)
+  
+  p <- ggplot(data, aes_string(x = X, y = "log(SalePrice)", color = category_var)) +
+    geom_point(alpha = 0.3) +
+    geom_smooth(method = "lm", se = FALSE) +
+    theme_minimal() +
+    labs(
+      title = paste("Effect of", X, "on log(SalePrice) by", category_var),
+      color = category_var
+    )
+  
+  # If highlight requested
+  if (!is.null(highlight_cat)) {
+    
+    levels_vec <- levels(data[[category_var]])
+    
+    # Create named color vector
+    color_vals <- rep("grey70", length(levels_vec))
+    names(color_vals) <- levels_vec
+    
+    if (highlight_cat %in% levels_vec) {
+      color_vals[highlight_cat] <- "red"
+    }
+    
+    p <- p + scale_color_manual(values = color_vals)
+  }
+  return (p)
+}
+
+compare_slopes_by_categories(data=Train, X = "TotalSF", category_var = "ExterQual")
+compare_slopes_by_categories(data=Train, X = "TotalSF", category_var = "ExterQual", "Ex")
+
+```
+
+
+**Testing and Validation split functions**
+
+This function will split your original dataset with 7000 rows, Train, into a training set "train" and a validation set "train.test" of 4900 and 2100 rows respectively. You can change these numbers. 
+
+```{r}
+reset <- function(Train, seed = 0, n_train = 4900) {
+if (seed == 0) {
+  seed <- as.integer(Sys.time())
+}
+  set.seed(seed)
+
+
+n_train <- n_train
+
+random_sample <- createDataPartition(
+  Train$SalePrice,
+  p = n_train / 7000,
+  list = FALSE
+)
+
+
+train <- Train[random_sample, ]
+train.test <- Train[-random_sample, ]
+
+list2env(
+  list(train = train,
+        train.test  = train.test,
+        seed  = seed),
+  envir = parent.frame()
+  )
+}
+
+```
+
+**Visual validation**
+This function, given a model (default for log Y ~ X) will split the Train df according to a seed and test the model on the validation set train.test. The closer points are to the line y = x, the better. 
+
+```{r}
+Train_Test_visual_validate <- function(lm, method = "log", seed = 0) {
+  reset(Train, seed)
+  
+    if (method == "log") {
+        train.test_prediction <- exp(predict(lm, train.test)) 
+    } else if (method == "normal") {
+      train.test_prediction <- predict(lm, train.test)
+    }
+  
+    corr <- cor(train.test_prediction, train.test$SalePrice, use = "complete.obs")
+  
+
+    ggplot(data = NULL, aes(x=train.test_prediction, y = train.test$SalePrice)) + geom_point(alpha=0.5) + 
+      scale_x_log10() + scale_y_log10() + 
+      geom_abline(slope=1, intercept=0, color = "gold") + 
+      theme_minimal() + 
+      labs(x = "Predicted Sale Price", y = "Actual Sale Price",
+            caption = paste0("Correlation between predicted and actual: ", round(corr, 3))
+           )
+  
+}
+
+```
+
+**Most important function**
+Cross validation: 
+Computes model performance metrics during resampling, calculating R2 on the log scale, and R2 plus RMSE on the original scale (What the Kaggle is testing!) by exponentiating the observed and predicted log values.
+
+```{r}
+origSummary <- function(data, lev = NULL, model = NULL) {
+  
+   # --- LOG SCALE METRICS ---
+  SS_res_log <- sum((data$obs - data$pred)^2)
+  SS_tot_log <- sum((data$obs - mean(data$obs))^2)
+  R2_log <- 1 - SS_res_log / SS_tot_log
+  
+  # --- ORIGINAL SCALE METRICS ---
+  obs_orig  <- exp(data$obs)
+  pred_orig <- exp(data$pred)
+  
+  SS_res_orig <- sum((obs_orig - pred_orig)^2)
+  SS_tot_orig <- sum((obs_orig - mean(obs_orig))^2)
+  R2_orig <- 1 - SS_res_orig / SS_tot_orig
+  
+  RMSE_orig <- sqrt(mean((obs_orig - pred_orig)^2))
+  
+  
+  
+  c(
+    Log_R2 = R2_log,
+    Orig_R2 = R2_orig,
+    Orig_RMSE = RMSE_orig
+  )
+}
+
+CrossValidation_TrainTest <- function(model, data=Train, number = 5, repeats = 5) {
+  ctrl <- trainControl(
+  method = "repeatedcv",
+  number = number,
+  repeats = repeats,
+  summaryFunction = origSummary
+)
+  
+  
+  model_cv <- train(
+  formula(model),
+  data = data,
+  method = "lm",
+  trControl = ctrl,
+  metric = "Orig_R2"
+)
+  
+model_cv$results$AIC <- AIC(model_cv$finalModel)
+  
+  
+return (model_cv)  
+}
+
+
+
+```
