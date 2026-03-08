@@ -18,6 +18,7 @@ library(ggfortify)
 library(tidyverse)
 library(dplyr)
 library(ggplot2)
+library(leaps)
 ```
 
 ```{r}
@@ -386,6 +387,28 @@ autoplot(Optimal0.82)
 ```
 
 ```{r}
+ggplot(HouseData, aes(x = Neighborhood, y = log(SalePrice))) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Log SalePrice by Neighborhood")
+neigh_model <- lm(log(SalePrice) ~ Neighborhood, data = HouseData)
+
+summary(neigh_model)
+OptimalNeighborhood <- lm(
+  log(SalePrice) ~ sqrt(TotalBsmtSF) +
+                   OverallQual +
+                   TextCatsSimpler +
+                   log(GrLivArea) +
+                   OverallQual:log(GrLivArea) +
+                   Neighborhood,
+  data = HouseDataPlus
+)
+
+summary(OptimalNeighborhood)$adj.r.squared
+autoplot(OptimalNeighborhood)
+```
+
+```{r}
 test <- read.csv("HousePriceTestNoY.csv")
 
 ReviewText_test <- test$House_Review_Text
@@ -399,7 +422,7 @@ test$TextCatsSimpler <- ifelse(TextCats_test %in% c("Crowded","Small","Old1","Ol
 
 test$TextCatsSimpler <- factor(test$TextCatsSimpler)
 
-predictions_log <- predict(Optimal0.955, newdata = test)
+predictions_log <- predict(OptimalNeighborhood, newdata = test)
 predictions <- exp(predictions_log)
 
 submit <- data.frame(
