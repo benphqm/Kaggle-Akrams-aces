@@ -21,3 +21,8 @@ Things to test: How to turn MSSubClass into a categorical variable or make it be
 
 Goal 2: Categorical predictors
 I haven't used categorical predictors at all actually, go find a way to use these
+
+
+
+3/8:
+Jack model 1: lm(log(SalePrice) ~ OverallQual + sqrt(TotalBsmtSF) + GarageCars + Log_LotArea + review_group, data=Train)
