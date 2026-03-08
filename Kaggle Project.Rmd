@@ -1,0 +1,411 @@
+---
+title: "Kaggle Project"
+output: pdf_document
+date: "2026-02-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "Kaggle comp"
+output: html_document
+date: "2026-02-22"
+---
+```{r}
+library(ggfortify)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+HouseData_raw <- read.csv("HousePriceTrain.csv")
+HouseData_raw
+```
+#We know there is one column that does not include any meaningful information, which is Utilities
+```{r}
+HouseData <- HouseData_raw
+HouseData$Utilities <- NULL
+```
+**Categorization of variables**
+
+```{r}
+potential_numeric_vars <- HouseData %>% sapply(is.numeric)
+par(mfrow = c(8, 6)) 
+
+
+HouseData_long <- HouseData[potential_numeric_vars] %>% gather(key = "variable", value = "value")
+ggplot(data=HouseData_long, aes(x = value)) + geom_histogram(bins = 20, fill = "skyblue", color = "black", alpha = 0.8) + 
+  facet_wrap(~variable, scales = "free", ncol = 8)
+
+```
+#Visually we can see that some of these are ordinal, their spacings are discrete. 
+#But if I look at one of them, sometimes it's entries that aren't exact, like there's 0.0001 instead of 0
+
+
+
+**Ordinal Categorical Predictors**
+#Simple check for potential ordinals
+```{r}
+detect_ordinal <- function(factor, tolerance = 0.1, max_unique=10) {
+  #Args: numerical list factor, int max_unique, float tolerance
+  
+  rounded_factor <- round(2*factor) / 2
+  num_unique <- length(unique(rounded_factor))
+  if (num_unique <= max_unique) {
+      differences <- factor - rounded_factor
+      all_less <- all(abs(differences) < tolerance)
+      
+      return (all_less)
+  } else {
+    return (FALSE)
+  }
+  
+}
+
+
+potential_ordinal <- c()
+
+for (colname in colnames(HouseData[potential_numeric_vars])) {
+  potential_ordinal <- c(potential_ordinal, detect_ordinal(HouseData[[colname]]))
+  
+}
+
+
+
+Ordinal <- (HouseData[potential_numeric_vars])[potential_ordinal]
+Ordinal_long <- gather(Ordinal, key = "Variable", value = "Value")
+
+ggplot(Ordinal_long, aes(x = Value)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black", alpha = 0.7) +
+  facet_wrap(~ Variable, scales = "free") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Histograms of Ordinal Variables", x = "Values", y = "Frequency")
+
+#We used a very liberal definition of ordinal variables, for example we can see how we can overcount as ordinal or are edge cases.
+#"BedroomAbvGr" I can consider to be a normal numerical variabel
+```
+```{r}
+Ordinal_factors <- c("BsmtFullBath", "BsmtHalfBath", "Fireplaces", "FullBath", "GarageCars", "HalfBath", "KitchenAbvGr", "YrSold")
+Numeric_factors <- setdiff(names(HouseData[potential_numeric_vars]), Ordinal_factors)
+Numeric_factors
+```
+**ATTEMPT A: Identifying most important numerical**
+
+```{r}
+library(corrplot)
+HouseDataNumeric <- HouseData[Numeric_factors]
+
+correlations <- cor(HouseDataNumeric)[, "SalePrice"]
+correlations <- correlations[names(correlations) != "SalePrice"]
+
+top10 <- round(sort(abs(correlations), decreasing = TRUE)[1:10], 3)
+cor_matrix_top10 <- cor(HouseDataNumeric[, c(names(top10), "SalePrice")])
+corrplot(cor_matrix_top10, method = "color", diag=FALSE, type = "upper")
+top10
+```
+#The top three are: TotalBsmtSF, X1stFlrSF, Qual_x_Area (These are all things to do with area, so are likely correlated themselves as we can see from the plot). Another decent variable (overallqual) shouldn't be too correlation to SF and doing LR off of just these two, we can already get an R2 of around 0.80. Pretty good
+
+```{r}
+MLR_basic <- lm(data = HouseDataNumeric, log(SalePrice) ~ TotalBsmtSF*OverallQual)
+summary(MLR_basic)
+```
+
+```{r}
+# Choose representative slices of OverallQual
+qual_levels <- quantile(HouseDataNumeric$OverallQual, 
+                        probs = c(0.05, 0.5, 0.95))
+
+# Create prediction grid
+newdata <- expand.grid(
+  TotalBsmtSF = seq(min(HouseDataNumeric$TotalBsmtSF),
+                    max(HouseDataNumeric$TotalBsmtSF),
+                    length.out = 100),
+  OverallQual = qual_levels
+)
+
+# Predict
+newdata$pred <- predict(MLR_basic, newdata)
+
+# Plot
+ggplot(HouseDataNumeric, 
+       aes(x = TotalBsmtSF, y = log(SalePrice))) +
+  geom_point(alpha = 0.3) +
+  geom_line(data = newdata,
+            aes(y = pred, color = factor(OverallQual)),
+            size = 1.2) +
+  scale_x_log10() + 
+  labs(color = "OverallQual (slice)",
+       title = "Effect of TotalBsmtSF on log(SalePrice)\nfor Different OverallQual Levels")
+```
+#Data Cleaning for identifying more stuff
+
+#House price should be log transformed. 
+
+```{r}
+logSalePrice <- log(HouseData$SalePrice)
+ggplot(NULL, aes(x = logSalePrice)) + geom_histogram(fill = "hotpink1", color = "black", alpha = 0.6) +
+  theme_minimal()
+```
+
+```{r}
+SQ_footage <- c("LotArea", "MasVnrArea", "BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "X1stFlrSF", "X2ndFlrSF", "LowQualFinSF", "GrLivArea", "GarageArea", "WoodDeckSF", "OpenPorchSF", "X3SsnPorch", "ScreenPorch", "PoolArea")
+
+logHouseData_SQ_footage <- log1p(HouseData[SQ_footage])
+HouseData_SQ_footage_long <- gather(HouseData[SQ_footage], key = "Variable", value = "Value")
+
+ggplot(HouseData_SQ_footage_long, aes(x = log1p(Value))) + 
+  geom_histogram(alpha = 0.5, color = "black", bins = 20, fill = "skyblue") +
+  facet_wrap(~ Variable, scales = "free") +
+  theme_minimal() 
+```
+#Log transforming reveals double distributions for a lot of variables. This makes sense: There is one distribution for variables with 0 of something (like houses without a porch) vs houses with a porch. 
+
+#Fuck its so obvious like this: We have nons with 0 or a little bit of basement then people with a ton of basement
+#This sucks with regular regression but could be good with a categorical var
+```{r}
+ggplot(data = HouseData, aes(x = log1p(TotalBsmtSF), y = log(SalePrice))) + geom_point() + 
+  geom_smooth(method = "lm", se = FALSE)
+```
+```{r}
+FUFU <- lm(data = HouseData, log(SalePrice) ~ log1p(TotalBsmtSF))
+summary(FUFU)
+
+```
+
+
+```{r}
+TotalBsmtSF <- HouseData$TotalBsmtSF 
+HouseData$BasementElite <- (log1p(TotalBsmtSF) > 3.75) 
+
+MLR3_basic <- lm(data = HouseData, log(SalePrice) ~ sqrt(TotalBsmtSF)*BasementElite)
+summary(MLR3_basic)
+
+ggplot(HouseData, aes(x = sqrt(TotalBsmtSF), y = log(SalePrice), color = BasementElite)) +
+  geom_point() +  # Add scatter points
+  geom_smooth(method = "lm", se = FALSE, aes(group = BasementElite)) +  # Add regression lines
+  labs(
+    title = "Scatterplot of log(SalePrice) vs sqrt(TotalBsmtSF)",
+    x = "log(TotalBsmtSF)",
+    y = "log(SalePrice)",
+    color = "BasementElite"
+  ) + scale_x_log10() + 
+  theme_minimal()
+```
+I need a better predictor for people who don't have elite basements
+
+```{r}
+HouseDataNons <- HouseData[!HouseData$BasementElite, ][Numeric_factors]
+
+
+for (col in names(HouseDataNons)) {
+  if (col != "SalePrice") {
+    p <- ggplot(HouseDataNons, aes(x = .data[[col]], y = SalePrice)) +
+      geom_point(alpha = 0.6) +
+      labs(title = paste("SalePrice vs", col),
+           x = col,
+           y = "SalePrice") +
+      theme_minimal()
+    
+    print(p)
+  }
+}
+
+sort(abs(cor(HouseDataNons)[, "SalePrice"]), decreasing=TRUE)
+```
+
+```{r}
+LModel <- lm(data=HouseData, log(SalePrice) ~ sqrt(TotalBsmtSF) * OverallQual * Qual_x_Area)
+summary(LModel)
+autoplot(LModel)
+```
+
+
+
+
+**Identifying most important components**
+#Most things numerical is either area, Quality/condition, or year/age
+```{r}
+#logHouseData_SQ_footage has logged area varaibles
+
+#Drop years and keep age, drop log ones already here
+drop_cols <- c("YearBuilt", "YearRemodAdd", "GarageYrBlt", "Log_GrLivArea", "Log_LotArea")
+HouseDataNorm <- HouseDataNumeric[, !(names(HouseDataNumeric) %in% drop_cols)]
+HouseDataNorm[, names(logHouseData_SQ_footage)] <- logHouseData_SQ_footage
+
+HouseDataNorm <- HouseDataNorm[names(HouseDataNorm) != "SalePrice"]
+HouseDataNorm <- HouseDataNorm[names(HouseDataNorm) != "X"]
+
+PCA <- prcomp(HouseDataNorm, center = TRUE, scale. = TRUE)
+summary(PCA)
+
+pc_loadings <- PCA$rotation[, 1:3]
+print(pc_loadings)
+
+
+pc1_sorted <- sort(abs(PCA$rotation[,1]), decreasing = TRUE)
+pc2_sorted <- sort(abs(PCA$rotation[,2]), decreasing = TRUE)
+pc3_sorted <- sort(abs(PCA$rotation[,3]), decreasing = TRUE)
+
+pc1_sorted
+pc2_sorted
+pc3_sorted
+
+var_explained <- PCA$sdev ^2 / sum(PCA$sdev^2)
+var_explained <- c(0, var_explained)
+cum_var <- cumsum(var_explained)
+
+ggplot(data=NULL, aes(x = 1:29, y = cum_var)) + geom_line()
+```
+
+**Using the text review data**
+
+```{r}
+library(tidytext)
+```
+
+```{r}
+ReviewText <- HouseData$House_Review_Text
+
+unique(ReviewText)
+
+```
+#The review text is not nearly advanced enough to require NLP. It's actually categorical
+
+#Making up sort of decent "Levels" for the text quality
+```{r}
+order <- c( 
+  #Shit houses
+  "Crowded neighborhood and parking issues",
+  "Small rooms and poor layout overall",
+  "Old house needing repairs and updates", 
+  "Outdated interior and worn finishes", 
+  "Noisy area with traffic nearby",
+  
+  #Normal houses
+  "Typical family home with basic features",
+  "Average house in a normal neighborhood",
+  "Decent property with standard layout",
+  "Standard design and fair condition", 
+  "Regular house with no major issues noted", 
+  
+  #Good houses
+  "Well maintained house with friendly neighbors",
+  "Excellent upgrades and feels move-in ready",
+  
+  "Spacious layout with modern design",
+  "Lovely neighborhood and very quiet area",
+  "Great location close to schools and parks",
+  "Beautiful home with great lighting and space"
+)
+ labels <- c(
+   "Crowded", "Small","Old1", "Old2", "Noisy", 
+   "Avg1", "Avg2", "Avg3", "Avg4", "Avg5", 
+   "Good1", "Good2", 
+   "Great1", "Great2", "Great3", "Great4" 
+ )
+
+
+TextCats <- factor(ReviewText, levels = order, labels = labels)
+```
+
+
+```{r}
+HouseDataPlus <- HouseData
+HouseDataPlus$TextCats <- TextCats
+
+ggplot(data=HouseDataPlus, aes(x = TextCats, y = log(SalePrice))) + geom_boxplot()
+HouseDataPlus
+
+textlm <- lm(data=HouseDataPlus, log(SalePrice) ~ TextCats)
+summary(textlm)
+
+```
+#R^2 is not that good.. but this shit is prolly not highly correlated with our other predictors perhaps?
+```{r}
+ggplot(data=HouseDataPlus, aes(x = TextCats, y = TotalBsmtSF)) + geom_point()
+ggplot(data=HouseDataPlus, aes(x = TextCats, y = OverallQual)) + geom_point()
+ggplot(data=HouseDataPlus, aes(x = TextCats, y = BasementElite)) + geom_point()
+```
+#So combining will get good R2
+
+```{r}
+Model0.90 <- lm(data=HouseDataPlus, log(SalePrice) ~ sqrt(TotalBsmtSF) * TextCats)
+summary(Model0.90)$adj.r.squared
+autoplot(Model0.90)
+
+
+```
+#Doing regression with respect to transformed TotalBsmtSF and TextCats gets us R2 of 0.907 with slight violation of our normal residuals assumption at the right side. But other plots look relatively good. 
+#We can actually increase R2 to 0.95 if we're fine with violating the normality of residuals even more. 
+
+```{r}
+Model0.95 <- lm(data=HouseDataPlus, log(SalePrice) ~ sqrt(TotalBsmtSF) * TextCats * OverallQual)
+summary(Model0.95)$adj.r.squared
+autoplot(Model0.95)
+```
+#Optimizing Text Cats: 
+```{r}
+HouseDataPlus$TextCatsSimpler <- HouseDataPlus %>% with(
+  ifelse(TextCats %in% c("Crowded", "Small","Old1", "Old2", "Noisy"), "Bad", 
+  ifelse(TextCats %in% c("Avg1", "Avg2", "Avg3", "Avg4", "Avg5"), "Avg",
+  ifelse(TextCats %in% c("Good1", "Good2"), "Good",
+  ifelse(TextCats %in% c("Great1", "Great2", "Great3", "Great4"), "Great", NA
+         ))))
+)
+
+Model0.90Reduced <- lm(data=HouseDataPlus, log(SalePrice) ~ sqrt(TotalBsmtSF) * TextCatsSimpler)
+summary(Model0.90Reduced)
+```
+#This only reduces R2 by 0.004 ish so its better
+
+```{r}
+AIC(Model0.90, Model0.90Reduced)
+```
+
+**Optimal Model Formation**
+Since the interaction term isn't so significant, let's go back to  + instaed
+After some testing if we add GrLivArea we can get a 0.05 increase in R2 with only one extra slope
+```{r}
+Optimal0.955 <- lm(
+  data = HouseDataPlus,
+  log(SalePrice) ~ sqrt(TotalBsmtSF) + OverallQual + TextCatsSimpler + 
+                   log(GrLivArea) + OverallQual:log(GrLivArea)
+)
+summary(Optimal0.955)$adj.r.squared
+autoplot(Optimal0.955)
+```
+#If we want a better-behaved model that doesn't partially violate the normality of residuals as much as this one does, we have to remove TextCats since there's a lot of outliers from the boxplot visually;  the best I could find is with three categorical variables and my negligible BasementElite engineered variable, which I included just to push the number to something I could round to 0.82, but really isn't necessary
+```{r}
+Optimal0.82 <- lm(data=HouseDataPlus, log(SalePrice) ~ sqrt(TotalBsmtSF)*BasementElite + OverallQual + Qual_x_Area)
+summary(Optimal0.82)
+autoplot(Optimal0.82)
+```
+
+```{r}
+test <- read.csv("HousePriceTestNoY.csv")
+
+ReviewText_test <- test$House_Review_Text
+
+TextCats_test <- factor(ReviewText_test, levels = order, labels = labels)
+
+test$TextCatsSimpler <- ifelse(TextCats_test %in% c("Crowded","Small","Old1","Old2","Noisy"), "Bad",
+                         ifelse(TextCats_test %in% c("Avg1","Avg2","Avg3","Avg4","Avg5"), "Avg",
+                         ifelse(TextCats_test %in% c("Good1","Good2"), "Good",
+                         ifelse(TextCats_test %in% c("Great1","Great2","Great3","Great4"), "Great", NA))))
+
+test$TextCatsSimpler <- factor(test$TextCatsSimpler)
+
+predictions_log <- predict(Optimal0.955, newdata = test)
+predictions <- exp(predictions_log)
+
+submit <- data.frame(
+  ID = 1:nrow(test),
+  SalePrice = predictions
+)
+
+write.csv(submit, "submission.csv", row.names = FALSE)
+```
