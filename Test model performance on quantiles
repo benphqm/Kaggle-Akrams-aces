@@ -1,0 +1,11 @@
+reset(Train) #this is from useful functions
+
+PREDS <- exp(predict(JackModel, train.test) + (summary(JackModel)$sigma)^2 / 2) 
+
+PREDS <- ifelse(PREDS >= 1e7, PREDS * 1.0, PREDS)
+idx <- train.test$SalePrice >= 7 * 1e6
+ratio <- train.test$SalePrice/PREDS
+
+
+cuts <- quantile(PREDS, probs = c(0, 0.80, 0.95, 0.99, 0.995, 1))
+tapply(ratio, cut(PREDS, breaks = cuts, include.lowest = TRUE), mean)
